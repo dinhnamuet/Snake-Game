@@ -1,0 +1,14 @@
+&i2c5 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c5_gpio10>;
+	status = "okay";
+	clock-frequency = <400000>;
+
+	oled@3c {
+		compatible = "ssd1306-oled,nam";
+		reg = <0x3c>;
+		status = "okay";
+
+		buttons-gpios = <&gpio 23 GPIO_ACTIVE_HIGH>, <&gpio 24 GPIO_ACTIVE_HIGH>, <&gpio 25 GPIO_ACTIVE_HIGH>, <&gpio 26 GPIO_ACTIVE_HIGH>;
+	};
+};
