@@ -18,8 +18,9 @@
 #define BUTTON_LEFT 3
 #define BUTTON_RIGHT 2
 
-const int max_X = OLED_WIDTH / FONT_X - 1;
-const int max_Y = OLED_HEIGHT / 8 - 1;
+const int max_X = OLED_WIDTH / FONT_X ;
+const int max_Y = OLED_HEIGHT / 8;
+const int frame_size = FONT_X * max_X * max_Y;
 
 struct ssd1306
 {
@@ -33,6 +34,9 @@ struct ssd1306
 	struct gpio_desc *down;
 	struct gpio_desc *left;
 	struct gpio_desc *right;
+
+	uint8_t *frame_buffer;
+	int current_index;
 
 	/* Game Area */
 	bool gameover;
@@ -52,6 +56,9 @@ static void ssd1306_send_char_inv(struct ssd1306 *oled, uint8_t data);
 static void ssd1306_send_string(struct ssd1306 *oled, uint8_t *str, color_t color);
 static void ssd1306_go_to_next_line(struct ssd1306 *oled);
 static int ssd1306_burst_write(struct ssd1306 *oled, const uint8_t *data, int len, write_mode_t mode);
+static void ssd1306_sync(struct ssd1306 *oled);
+static int embedded_to_buffer(struct ssd1306 *oled, uint8_t *data, int start, int length);
+
 static void animation(struct work_struct *work);
 static void tmHandler(struct timer_list *tm);
 
@@ -96,9 +103,9 @@ static int oled_probe(struct i2c_client *client)
 	dev = &client->dev;
 	i2c_set_clientdata(client, oled);
 	ssd1306_init(oled);
-	ssd1306_goto_xy(oled, 0, 0);
-	ssd1306_send_string(oled, "Snack Game", COLOR_WHITE);
-	ssd1306_clear(oled);
+	oled->frame_buffer = kzalloc(frame_size, GFP_KERNEL);
+	if(!oled->frame_buffer)
+		return -ENOMEM;
 	oled->up = gpiod_get_index(dev, "buttons", BUTTON_UP, GPIOD_IN);
 	oled->down = gpiod_get_index(dev, "buttons", BUTTON_DOWN, GPIOD_IN);
 	oled->left = gpiod_get_index(dev, "buttons", BUTTON_LEFT, GPIOD_IN);
@@ -113,10 +120,10 @@ static int oled_probe(struct i2c_client *client)
 		if (request_irq(oled->button_irq[i], buttonHandler, IRQF_TRIGGER_FALLING | IRQF_SHARED, label[i], oled) < 0)
 		{
 			pr_err("request irq gpio %d failed!\n", i);
-			return -ENODEV;
+			goto free_buff;
 		}
 	}
-
+	oled->current_index = 0;
 	snake_game_setup(oled);
 	snake_game_draw(oled);
 
@@ -125,6 +132,9 @@ static int oled_probe(struct i2c_client *client)
 	oled->my_timer.expires = jiffies + HZ / 5;
 	add_timer(&oled->my_timer);
 	return 0;
+free_buff:
+	kfree(oled->frame_buffer);
+	return -ENODEV;
 }
 static void oled_remove(struct i2c_client *client)
 {
@@ -144,6 +154,7 @@ static void oled_remove(struct i2c_client *client)
 		gpiod_put(oled->right);
 		cancel_work_sync(&oled->workqueue);
 		del_timer(&oled->my_timer);
+		kfree(oled->frame_buffer);
 		ssd1306_clear(oled);
 		ssd1306_write(oled, 0xAE, COMMAND); // display off
 	}
@@ -272,7 +283,7 @@ static void ssd1306_goto_xy(struct ssd1306 *oled, uint8_t x, uint8_t y)
 }
 static void ssd1306_send_char(struct ssd1306 *oled, uint8_t data)
 {
-	if (oled->current_X == max_X)
+	if (oled->current_X == max_X - 1)
 		ssd1306_go_to_next_line(oled);
 	ssd1306_burst_write(oled, ssd1306_font[data - 32], FONT_X, DATA);
 	oled->current_X++;
@@ -281,7 +292,7 @@ static void ssd1306_send_char_inv(struct ssd1306 *oled, uint8_t data)
 {
 	uint8_t i;
 	uint8_t buff[FONT_X];
-	if (oled->current_X == max_X)
+	if (oled->current_X == max_X - 1)
 		ssd1306_go_to_next_line(oled);
 	for (i = 0; i < FONT_X; i++)
 		buff[i] = ~ssd1306_font[data - 32][i];
@@ -300,10 +311,33 @@ static void ssd1306_send_string(struct ssd1306 *oled, uint8_t *str, color_t colo
 }
 static void ssd1306_go_to_next_line(struct ssd1306 *oled)
 {
-	oled->current_Y = (oled->current_Y == max_Y) ? 0 : (oled->current_Y + 1);
+	oled->current_Y = (oled->current_Y == max_Y - 1) ? 0 : (oled->current_Y + 1);
 	ssd1306_goto_xy(oled, 0, oled->current_Y);
 }
-
+static int embedded_to_buffer(struct ssd1306 *oled, uint8_t *data, int start, int length)
+{
+	oled->current_index = FONT_X * start;
+	if(length > frame_size)
+		return -1;
+	for(int i = 0; i < length; i++)
+	{
+		memcpy(&oled->frame_buffer[oled->current_index], ssd1306_font[*data++ - 32], 6);
+		oled->current_index += 6;
+	}
+	return 0;
+}
+static void ssd1306_sync(struct ssd1306 *oled)
+{
+	int i;
+	int index = 0;
+	ssd1306_goto_xy(oled, 0, 0);
+	for (i = 0; i < max_Y; i++)
+	{
+		ssd1306_burst_write(oled, &oled->frame_buffer[index], max_X*FONT_X, DATA);
+		ssd1306_go_to_next_line(oled);
+		index += max_X*FONT_X;
+	}
+}
 static void animation(struct work_struct *work)
 {
 	struct ssd1306 *oled = container_of(work, struct ssd1306, workqueue);
@@ -350,39 +384,35 @@ static void snake_game_setup(struct ssd1306 *oled)
 }
 static void snake_update_score(struct ssd1306 *oled, uint32_t score)
 {
-	int i;
-	char scoreBuffer[20];
-	ssd1306_goto_xy(oled, 0, 0);
-	for (i = 0; i < 20 * FONT_X; i++)
-		ssd1306_write(oled, 0, DATA);
+	uint8_t scoreBuffer[21];
 	memset(scoreBuffer, 0, sizeof(scoreBuffer));
-	sprintf(scoreBuffer, "Score: %d", score);
-	ssd1306_goto_xy(oled, 0, 0);
-	ssd1306_send_string(oled, scoreBuffer, COLOR_WHITE);
+	sprintf(scoreBuffer, "My Score: %d", score);
+	embedded_to_buffer(oled, scoreBuffer, 0, strlen(scoreBuffer));
 }
 static void snake_game_draw(struct ssd1306 *oled)
 {
 	int i, j;
-	ssd1306_clear(oled);
-	for (i = 0; i < max_Y; i++)
+	oled->current_index = 6*max_X;
+	for (i = 1; i < max_Y; i++)
 	{
 		for (j = 0; j < max_X; j++)
 		{
-			if (i == 0 || i == max_Y - 1 || j == 0 || j == max_X - 1)
-				ssd1306_send_char(oled, '+');
+			if (i == 1 || i == max_Y - 1 || j == 0 || j == max_X - 1)
+				memcpy(&oled->frame_buffer[oled->current_index], ssd1306_font['+' - 32], 6);
 			else
 			{
 				if (i == oled->mySnake.y && j == oled->mySnake.x)
-					ssd1306_send_char(oled, '0');
+					memcpy(&oled->frame_buffer[oled->current_index], ssd1306_font['o' - 32], 6);
 				else if (i == oled->myFood.y && j == oled->myFood.x)
-					ssd1306_send_char(oled, '*');
+					memcpy(&oled->frame_buffer[oled->current_index], ssd1306_font['*' - 32], 6);
 				else
-					ssd1306_send_char(oled, ' ');
+				 	memcpy(&oled->frame_buffer[oled->current_index], ssd1306_font[' ' - 32], 6);
 			}
+			oled->current_index += 6;
 		}
-		ssd1306_go_to_next_line(oled);
 	}
 	snake_update_score(oled, oled->score);
+	ssd1306_sync(oled);
 }
 static void snake_game_logic(struct ssd1306 *oled)
 {
@@ -410,9 +440,9 @@ static void snake_game_logic(struct ssd1306 *oled)
 		oled->myFood.x = 0;
 		oled->myFood.y = 0;
 		while (!oled->myFood.x)
-			oled->myFood.x = create_random_number(max_X - 1);
-		while (!oled->myFood.y)
-			oled->myFood.y = create_random_number(max_Y - 1);
+			oled->myFood.x = create_random_number(max_X - 2);
+		while (oled->myFood.y < 2)
+			oled->myFood.y = create_random_number(max_Y - 2);
 		oled->score += 10;
 	}
 }
