@@ -102,15 +102,6 @@ const uint8_t ssd1306_font[][FONT_X] = {
 		{0x00, 0x82, 0x7C, 0x10, 0x00, 0x00}, // }
 		{0x00, 0x06, 0x09, 0x09, 0x06, 0x00}	// ~ (Degrees)
 };
-
-struct snake {
-	uint8_t x;
-	uint8_t y;
-};
-struct food {
-	uint8_t x;
-	uint8_t y;
-};
 typedef enum {
 	PAUSE,
 	UP,
@@ -118,6 +109,15 @@ typedef enum {
 	LEFT,
 	RIGHT
 } control_t;
+struct snake {
+	uint8_t x;
+	uint8_t y;
+	control_t direction;
+};
+struct food {
+	uint8_t x;
+	uint8_t y;
+};
 typedef enum {
 	COLOR_BLACK,
 	COLOR_WHITE
