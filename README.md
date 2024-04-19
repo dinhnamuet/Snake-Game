@@ -1,7 +1,7 @@
 Snake-game can be run on embedded board.
 In my example, i run it on my Raspberry pi 4b
 Step 1:
-	Download my founder to your computer, use command "make".
+	Download my git folder to your computer, use command "make".
 
 Step 2:
 	Copy .ko file to your Raspberry Pi 4b
